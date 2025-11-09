@@ -1,4 +1,6 @@
 import { supabase } from '@/lib/supabase';
+import { igdbCoverUrl } from './profile';
+import { __private__ as IGDB } from './igdb';
 
 export type CommentItem = {
   id: number;
@@ -9,6 +11,14 @@ export type CommentItem = {
   profile?: { id: string; username?: string | null; avatar_url?: string | null };
   likes_count: number;
   liked_by_me: boolean;
+};
+
+export type DiaryEntry = {
+  id: number;
+  igdb_id: number;
+  text: string;
+  created_at: string;
+  game: { name: string; cover_url: string | null };
 };
 
 async function getUserId(): Promise<string | undefined> {
@@ -84,3 +94,46 @@ export async function unlikeComment(commentId: number): Promise<void> {
   await supabase.from('comment_likes').delete().eq('comment_id', commentId).eq('profile_id', uid).then(() => {});
 }
 
+export async function listRecentCommentsByUser(userId: string, limit: number = 3): Promise<DiaryEntry[]> {
+  const { data: rows, error } = await supabase
+    .from('comments')
+    .select('id, game_igdb_id, text, created_at')
+    .eq('profile_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  const list = (rows || []) as { id: number; game_igdb_id: number; text: string; created_at: string }[];
+  const ids = Array.from(new Set(list.map(r => r.game_igdb_id).filter(Boolean)));
+  const gameMap = new Map<number, { name?: string | null; cover_image_id?: string | null }>();
+  if (ids.length) {
+    const { data: games } = await supabase
+      .from('games')
+      .select('igdb_id, name, cover_image_id')
+      .in('igdb_id', ids);
+    (games || []).forEach((g: any) => { gameMap.set(Number(g.igdb_id), { name: g.name, cover_image_id: g.cover_image_id }); });
+    // Identify missing or incomplete
+    const missing = ids.filter(id => !gameMap.has(id) || !gameMap.get(id)?.name);
+    if (missing.length) {
+      const batch = missing.slice(0, 30);
+      const fields = 'fields id,name,cover.image_id;';
+      const query = `${fields} where id = (${batch.join(',')}); limit ${batch.length};`;
+      try {
+        const rows = await IGDB.igdbRequest<any[]>(query);
+        (rows || []).forEach((r: any) => {
+          const cover = r?.cover?.image_id || null;
+          gameMap.set(Number(r.id), { name: r.name, cover_image_id: cover });
+        });
+      } catch {}
+    }
+  }
+  return list.map((r) => {
+    const g = gameMap.get(r.game_igdb_id) || { name: `Jogo ${r.game_igdb_id}`, cover_image_id: null };
+    return {
+      id: r.id,
+      igdb_id: r.game_igdb_id,
+      text: r.text,
+      created_at: r.created_at,
+      game: { name: g.name || `Jogo ${r.game_igdb_id}`, cover_url: igdbCoverUrl(g.cover_image_id || undefined) },
+    } as DiaryEntry;
+  });
+}
