@@ -1,0 +1,120 @@
+            style={styles.bannerGradient}
+          />
+          
+          {/* Back Button */}
+          <SafeAreaView style={styles.headerContainer}>
+            <TouchableOpacity 
+              onPress={handleBack} 
+              style={styles.backButton}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons name="arrow-back" size={24} color={colors.white} />
+            </TouchableOpacity>
+          </SafeAreaView>
+        </View>
+
+        {/* Game Info Card */}
+        <GameInfoCard
+          coverImage={game.cover_image || game.background_image}
+          title={game.name}
+          producer={developer}
+          platforms={platforms}
+          year={releaseYear}
+          trophies={game.achievements_count || 0}
+          completionTime={getCompletionTime(game.playtime)}
+          trophiesSource={(game as any).achievements_source || ''}
+          completionSource={(game as any).playtime_source || ''}
+          onAddPress={handleAddGame}
+        />
+
+        {/* Rating Chart */}
+        <RatingChart
+          rating={combinedRating}
+          ratingsCount={combinedCount}
+          distribution={ratingDistribution}
+        />
+
+        {/* User rating stars */}
+        {gameId && (
+          <View style={{ marginHorizontal: 16, marginTop: 10, flexDirection: 'row', alignItems: 'center' }}>
+            {[1,2,3,4,5].map((s) => (
+              <TouchableOpacity
+                key={s}
+                onPress={async () => {
+                  try {
+                    setMyRate(s);
+                    await ur.setRating(s);
+                    try { await Haptics.selectionAsync(); } catch {}
+                  } catch (e) {
+                    Alert.alert('Aviso', 'Faça login para avaliar o jogo.');
+                  }
+                }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                style={{ paddingHorizontal: 2 }}
+                activeOpacity={0.7}
+              >
+                <Text style={{ fontSize: 24, color: (myRate ?? 0) >= s ? '#FCD34D' : colors.secondary }}>*</Text>
+              </TouchableOpacity>
+            ))}
+            <Text style={{ marginLeft: 8, color: colors.secondary }}>Sua avaliação</Text>
+          </View>
+        )}
+
+        {/* About Section */}
+        <GameAboutSection description={cleanDescription} />
+
+        {/* Screenshots */}
+        {screenshots && screenshots.length > 0 && (
+          <GameScreenshots screenshots={screenshots} />
+        )}
+
+        {/* Comments */}
+        <Comments igdbId={game.id} />
+
+        {/* Steam Reviews */}
+        {steamReviews && steamReviews.length > 0 && (
+          <GameReviews reviews={steamReviews} />
+        )}
+      </ScrollView>
+      <AddToCollectionQuickModal visible={showAdd} onClose={() => setShowAdd(false)} game={game ? { id: game.id, name: game.name, slug: game.slug, coverUrl: game.cover_image || game.background_image } : null} />
+    </>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.background,
+  },
+  bannerContainer: {
+    height: BANNER_HEIGHT,
+    width: screenWidth,
+    position: 'relative',
+  },
+  bannerImage: {
+    width: '100%',
+    height: '100%',
+  },
+  bannerOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+  },
+  bannerGradient: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  headerContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 16,
