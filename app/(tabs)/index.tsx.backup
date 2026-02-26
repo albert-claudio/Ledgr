@@ -1,0 +1,122 @@
+﻿import { SideMenu } from '@/components/common/SideMenu';
+import { EmptyFeedAction } from '@/components/feed/EmptyFeedAction';
+import { FeedItem } from '@/components/feed/FeedItem';
+import { PersonalDashboard } from '@/components/feed/PersonalDashboard';
+import { HomeHeader } from '@/components/Home/HomeHeader';
+import { colors } from '@/components/theme/colors';
+import { useAuth } from '@/providers/AuthProvider';
+import { fetchFeed } from '@/services/feedService';
+import { FeedEvent } from '@/types/feed';
+import { FlashList } from '@shopify/flash-list';
+import * as Haptics from 'expo-haptics';
+import React, { useCallback, useEffect, useState } from 'react';
+import { RefreshControl, StyleSheet } from 'react-native';
+import ConfettiCannon from 'react-native-confetti-cannon';
+import { SafeAreaView } from 'react-native-safe-area-context';
+
+export default function HomeScreen() {
+  const [feed, setFeed] = useState<FeedEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [explosion, setExplosion] = useState<any>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const { signOut } = useAuth();
+
+  const loadFeed = async () => {
+    try {
+      const data = await fetchFeed();
+      setFeed(data);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadFeed();
+  }, []);
+
+  const onRefresh = useCallback(async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setRefreshing(true);
+    // We should also refetch the dashboard data here, but that's handled inside PersonalDashboard's hooks
+    // Ideally we would expose a refetch method or share the query client, but for now let's just refresh the feed
+    await loadFeed();
+    setRefreshing(false);
+  }, []);
+
+  const renderItem = ({ item }: { item: FeedEvent }) => (
+    <FeedItem event={item} />
+  );
+
+  const handleMenuPress = () => setMenuOpen(true);
+
+  return (
+    <SafeAreaView style={styles.container} edges={['top']}>
+      {/* Header do App (Início + Sino) */}
+      <HomeHeader onMenuPress={handleMenuPress} />
+
+      <FlashList
+        data={feed}
+        renderItem={renderItem}
+        estimatedItemSize={200}
+        keyExtractor={(item) => item.id}
+        refreshControl={
+          <RefreshControl 
+            refreshing={refreshing} 
+            onRefresh={onRefresh} 
+            tintColor={colors.accent}
+            colors={[colors.accent]}
+          />
+        }
+        contentContainerStyle={styles.listContent}
+        ListHeaderComponent={<PersonalDashboard />}
+        ListEmptyComponent={
+          !loading ? <EmptyFeedAction /> : null
+        }
+      />
+      
+      {/* Confetti Cannon for special interactions */}
+      <ConfettiCannon
+        count={200}
+        origin={{x: -10, y: 0}}
+        autoStart={false}
+        ref={ref => setExplosion(ref)}
+      />
+
+      <SideMenu
+        visible={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        title="Menu"
+        items={[
+          { label: 'Sobre nós' },
+          { label: 'Leis e Termos' },
+          { label: 'Configurações' },
+          { label: 'Sair', onPress: () => signOut() },
+        ]}
+      />
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#0D0D0D', // Dark Mode Background
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  listContent: {
+    paddingBottom: 100,
+  },
+  emptyText: {
+    color: '#666',
+    textAlign: 'center',
+    marginTop: 20,
+    fontSize: 14,
+  }
+});

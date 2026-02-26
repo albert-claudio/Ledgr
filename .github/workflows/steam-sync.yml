@@ -1,0 +1,33 @@
+name: Steam Background Sync
+
+on:
+  schedule:
+    # Executa a cada 4 horas (00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC)
+    - cron: "0 */4 * * *"
+  workflow_dispatch: # Permite execução manual
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Steam Sync
+        run: |
+          echo "Starting Steam background sync..."
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "${{ secrets.SUPABASE_URL }}/functions/v1/steam_sync_scheduler" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d '{"source": "github-actions"}')
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "Response: $body"
+          echo "HTTP Code: $http_code"
+
+          if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+            echo "✅ Sync triggered successfully!"
+          else
+            echo "❌ Sync failed with HTTP $http_code"
+            exit 1
+          fi
