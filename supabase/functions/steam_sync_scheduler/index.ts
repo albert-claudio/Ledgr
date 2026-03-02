@@ -82,24 +82,28 @@ serve(async (req) => {
       continue;
     }
 
-    // Trigger worker
-    // We use invoke with the Service Role Key so the worker knows it's an admin call
-    // and we pass profile_id in the body
+    // Trigger worker and await to guarantee dispatch before function returns.
     try {
-      // We don't await the result to process others faster, 
-      // but we should catch immediate errors.
-      // Actually, for a cron job, it's better to await or use a queue. 
-      // Since we have a limit of 50, we can await slightly or just fire and forget.
-      // Let's fire and forget but log.
-      supabase.functions.invoke("steam_sync_worker", {
+      const { error: invokeErr } = await supabase.functions.invoke("steam_sync_worker", {
         body: { profile_id: acc.profile_id, limitJobs: 1 }
-      }).then(({ error }) => {
-        if (error) console.error(`Worker invocation failed for ${acc.profile_id}:`, error);
       });
-      
+
+      if (invokeErr) {
+        console.error(`Worker invocation failed for ${acc.profile_id}:`, invokeErr);
+        await supabase
+          .from("steam_sync_jobs")
+          .update({ status: "failed", detail: `worker invoke failed: ${invokeErr.message || 'unknown error'}` })
+          .eq("id", job.id);
+        continue;
+      }
+
       results.push({ profile_id: acc.profile_id, job_id: job.id });
-    } catch (e) {
+    } catch (e: any) {
       console.error(`Failed to invoke worker for ${acc.profile_id}:`, e);
+      await supabase
+        .from("steam_sync_jobs")
+        .update({ status: "failed", detail: `worker invoke exception: ${e?.message || 'unknown error'}` })
+        .eq("id", job.id);
     }
   }
 

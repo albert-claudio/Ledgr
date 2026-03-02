@@ -131,75 +131,77 @@ serve(async (req) => {
   // ==========================================
   // SUPABASE CLIENT INITIALIZATION
   // ==========================================
-  // Support both Service Role (from scheduler) and User Auth (from direct call)
-  const authHeader = req.headers.get("Authorization");
-  const isServiceRoleCall = !authHeader || !authHeader.includes("Bearer ey");
-  
+  // Support user-authenticated calls and background service-role calls.
+  const authHeader = req.headers.get("Authorization") ?? "";
+  const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
+
   let supabase;
-  let userId: string;
-  let user: { id: string };
-  
-  if (isServiceRoleCall) {
-    // Called from scheduler - use Service Role Key
-    supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-    
-    // Get userId from request body
-    const body = await req.json().catch(() => ({}));
-    userId = body.userId || body.profile_id;
-    
-    if (!userId) {
-      return respondError("missing_user_id", "userId or profile_id is required for background sync", 400);
-    }
-    
-    user = { id: userId };
-    console.log(`[steam_sync_worker] Background call for user: ${userId}`);
-  } else {
-    // Called by user - use their auth
-    supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  let userId: string | undefined;
+
+  if (authHeader) {
+    const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       global: { headers: { Authorization: authHeader } }
     });
-    
-    const { data: { user: authUser }, error: authError } = await supabase.auth.getUser();
-    
-    if (authError || !authUser) {
-      return respondError("unauthorized", "Authentication required", 401);
+
+    const { data: { user: authUser }, error: authError } = await userClient.auth.getUser();
+    if (!authError && authUser) {
+      userId = authUser.id;
+      supabase = userClient;
+      console.log(`[steam_sync_worker] User call for: ${userId}`);
     }
-    
-    userId = authUser.id;
-    user = { id: authUser.id };
-    console.log(`[steam_sync_worker] User call for: ${userId}`);
   }
-  
+
+  // Fallback: background execution uses service-role and may process one user or many.
+  if (!supabase) {
+    userId = body.userId || body.profile_id;
+    supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    if (userId) {
+      console.log(`[steam_sync_worker] Background call for user: ${userId}`);
+    } else {
+      console.log("[steam_sync_worker] Background call for pending jobs (all users)");
+    }
+  }
+
   // Get optional limit from query params or body
   const url = new URL(req.url);
-  const limit = Number(url.searchParams.get("limit")) || 1;
+  const limit = Number(url.searchParams.get("limit")) || Number(body.limitJobs) || 1;
 
   // ==========================================
   // MAIN LOGIC
   // ==========================================
-  const { data: jobs, error: jobsErr } = await supabase
+  let jobsQuery = supabase
     .from("steam_sync_jobs")
-    .select("id")
-    .eq("profile_id", user.id)
+    .select("id, profile_id")
     .eq("stage", "library")
     .eq("status", "pending")
+    .order("created_at", { ascending: true })
     .limit(limit);
+
+  if (userId) jobsQuery = jobsQuery.eq("profile_id", userId);
+
+  const { data: jobs, error: jobsErr } = await jobsQuery;
 
   if (jobsErr) return respondError("db_error", jobsErr.message, 500);
   if (!jobs || jobs.length === 0) return respond({ message: "Nenhum job pendente." });
 
-  const { data: acc } = await supabase
-    .from("steam_accounts")
-    .select("steamid")
-    .eq("profile_id", user.id)
-    .single();
-
-  if (!acc?.steamid) return respondError("no_steam_account", "Conta Steam não vinculada.", 400);
-  const steamid = acc.steamid;
   const processed: number[] = [];
 
   for (const job of jobs) {
-    console.log(`Processing job ${job.id}...`);
+    userId = job.profile_id;
+    console.log(`Processing job ${job.id} for user ${userId}...`);
+
+    const { data: acc } = await supabase
+      .from("steam_accounts")
+      .select("steamid")
+      .eq("profile_id", userId)
+      .single();
+
+    if (!acc?.steamid) {
+      await supabase.from("steam_sync_jobs").update({ status: "failed", detail: "Conta Steam não vinculada." }).eq("id", job.id);
+      continue;
+    }
+
+    const steamid = acc.steamid;
     await supabase.from("steam_sync_jobs").update({ status: "processing", progress: 10, detail: "buscando dados steam" }).eq("id", job.id);
 
     try {
@@ -251,7 +253,7 @@ serve(async (req) => {
       await supabase.from("steam_apps").upsert(apps, { onConflict: "appid" });
 
       const links = normalized.map((g: any) => ({
-        profile_id: user.id,
+        profile_id: userId,
         steam_appid: g.appid,
         playtime_forever: g.playtime_forever,
         playtime_recent: g.playtime_recent,
