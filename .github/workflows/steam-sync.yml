@@ -1,6 +1,6 @@
 name: Steam Background Sync
 
-on:
+"on":
   schedule:
     # Executa a cada 4 horas (00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC)
     - cron: "0 */4 * * *"
@@ -9,15 +9,24 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Trigger Steam Sync
+        shell: bash
         run: |
+          set -euo pipefail
+
+          if [ -z "${{ secrets.SUPABASE_URL }}" ]; then
+            echo "❌ Missing secret: SUPABASE_URL"
+            exit 1
+          fi
+
           echo "Starting Steam background sync..."
-          response=$(curl -s -w "\n%{http_code}" -X POST \
+          response=$(curl --silent --show-error --location --max-time 60 --write-out "\n%{http_code}" \
+            --request POST \
             "${{ secrets.SUPABASE_URL }}/functions/v1/steam_sync_scheduler" \
-            -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d '{"source": "github-actions"}')
+            --header "Content-Type: application/json" \
+            --data '{"source": "github-actions"}')
 
           http_code=$(echo "$response" | tail -n1)
           body=$(echo "$response" | sed '$d')
@@ -25,7 +34,7 @@ jobs:
           echo "Response: $body"
           echo "HTTP Code: $http_code"
 
-          if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+          if [[ "$http_code" =~ ^[0-9]{3}$ ]] && [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
             echo "✅ Sync triggered successfully!"
           else
             echo "❌ Sync failed with HTTP $http_code"
