@@ -1,42 +1,73 @@
 name: Steam Background Sync
 
-"on":
+on:
+  workflow_dispatch:
   schedule:
-    # Executa a cada 4 horas (00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC)
-    - cron: "0 */4 * * *"
-  workflow_dispatch: # Permite execução manual
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: steam-background-sync
+  cancel-in-progress: false
 
 jobs:
-  sync:
+  trigger-sync:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      SECRET_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      VAR_SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SCHEDULER_SECRET: ${{ secrets.STEAM_SYNC_SCHEDULER_SECRET }}
     steps:
-      - name: Trigger Steam Sync
+      - name: Validate configuration
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ -z "${{ secrets.SUPABASE_URL }}" ]; then
-            echo "❌ Missing secret: SUPABASE_URL"
+          supabase_url="${SECRET_SUPABASE_URL:-${VAR_SUPABASE_URL:-}}"
+          if [ -z "$supabase_url" ]; then
+            echo "::error::Configure o secret ou variable SUPABASE_URL no repositorio."
             exit 1
           fi
 
-          echo "Starting Steam background sync..."
-          response=$(curl --silent --show-error --location --max-time 60 --write-out "\n%{http_code}" \
-            --request POST \
-            "${{ secrets.SUPABASE_URL }}/functions/v1/steam_sync_scheduler" \
-            --header "Content-Type: application/json" \
-            --data '{"source": "github-actions"}')
+          echo "SUPABASE_URL configurada."
 
-          http_code=$(echo "$response" | tail -n1)
-          body=$(echo "$response" | sed '$d')
+      - name: Trigger steam sync scheduler
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          echo "Response: $body"
-          echo "HTTP Code: $http_code"
+          supabase_url="${SECRET_SUPABASE_URL:-${VAR_SUPABASE_URL:-}}"
+          function_url="${supabase_url%/}/functions/v1/steam_sync_scheduler"
+          response_file="$(mktemp)"
 
-          if [[ "$http_code" =~ ^[0-9]{3}$ ]] && [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
-            echo "✅ Sync triggered successfully!"
-          else
-            echo "❌ Sync failed with HTTP $http_code"
+          headers=(-H "Content-Type: application/json")
+          if [ -n "${SCHEDULER_SECRET:-}" ]; then
+            headers+=(-H "x-cron-secret: ${SCHEDULER_SECRET}")
+          fi
+
+          http_status="$(
+            curl \
+              --silent \
+              --show-error \
+              --location \
+              --retry 3 \
+              --retry-all-errors \
+              --retry-delay 5 \
+              --output "$response_file" \
+              --write-out "%{http_code}" \
+              -X POST \
+              "${headers[@]}" \
+              "$function_url"
+          )"
+
+          echo "HTTP ${http_status}"
+          cat "$response_file"
+          echo
+
+          if [ "$http_status" -lt 200 ] || [ "$http_status" -ge 300 ]; then
+            echo "::error::steam_sync_scheduler retornou HTTP ${http_status}."
             exit 1
           fi
